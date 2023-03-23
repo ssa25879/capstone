@@ -173,8 +173,8 @@ function Login() {
         />
         <LoginButton type="submit">Log in</LoginButton>
       </LoginForm>
-      {isModalOpen && <Modal closeModal={closeModal} />} // 모달이 열릴 때만
-      렌더링
+      {isModalOpen && <Modal closeModal={closeModal} />}
+      {/* 모달이 열릴 때만 랜더링 */}
     </LoginContainer>
   );
 }

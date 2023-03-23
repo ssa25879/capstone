@@ -29,6 +29,7 @@ function App() {
       <Container>
         <Header />
         <Main>
+          {showModal && <Modal onClose={() => setShowModal(false)} />}
           <Routes>
             <Route path="/signup" element={<Signup />} />
             <Route path="/about" element={<About />} />
@@ -36,7 +37,6 @@ function App() {
           </Routes>
         </Main>
         <Footer />
-        {showModal && <Modal onClose={() => setShowModal(false)} />}
       </Container>
     </Router>
   );
