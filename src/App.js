@@ -9,7 +9,7 @@ import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import About from "./pages/About";
 import Modal from "./components/Modal";
-import EditorBox from "./components/Editor";
+// import EditorBox from "./components/Editor";
 
 const Container = styled.div`
   display: flex;
@@ -30,7 +30,7 @@ function App() {
       <Container>
         <Header />
         <Main>
-          <EditorBox />
+          {/* <EditorBox /> */}
           {showModal && <Modal onClose={() => setShowModal(false)} />}
           <Routes>
             <Route path="/signup" element={<Signup />} />
