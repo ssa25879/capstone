@@ -9,7 +9,8 @@ import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import About from "./pages/About";
 import Modal from "./components/Modal";
-// import EditorBox from "./components/Editor";
+import ProfilePage from "./pages/ProfilePage";
+import EditBox from "./components/EditBox";
 
 const Container = styled.div`
   display: flex;
@@ -30,13 +31,15 @@ function App() {
       <Container>
         <Header />
         <Main>
-          {/* <EditorBox /> */}
-          {showModal && <Modal onClose={() => setShowModal(false)} />}
+          {/* 아래는 테스트 */}
+          {/* <ProfilePage /> */}
+          <EditBox />
+          {/* {showModal && <Modal onClose={() => setShowModal(false)} />}
           <Routes>
             <Route path="/signup" element={<Signup />} />
             <Route path="/about" element={<About />} />
             <Route path="/" element={<Login />} />
-          </Routes>
+          </Routes> */}
         </Main>
         <Footer />
       </Container>
