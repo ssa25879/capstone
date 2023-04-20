@@ -44,6 +44,7 @@ function Signup() {
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [birth, setBirth] = useState("");
 
   const handleUsernameChange = (event) => {
     setUsername(event.target.value);
@@ -59,9 +60,14 @@ function Signup() {
 
   const handleSubmit = (event) => {
     event.preventDefault();
+    // 서버로 보낼 내용
     console.log(
-      `Username: ${username}, Email: ${email}, Password: ${password}`
+      `Username: ${username}, Email: ${email}, Password: ${password}, Birth: ${birth}`
     );
+  };
+
+  const handleBirthChange = (event) => {
+    setBirth(event.target.value);
   };
 
   return (
@@ -84,6 +90,12 @@ function Signup() {
           placeholder="Password"
           value={password}
           onChange={handlePasswordChange}
+        />
+        <SignupInput
+          type="date"
+          placeholder="Date of Birth"
+          value={birth}
+          onChange={handleBirthChange}
         />
         <SignupButton type="submit">Sign Up</SignupButton>
       </SignupForm>

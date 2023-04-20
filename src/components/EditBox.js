@@ -9,9 +9,10 @@ const EditBox = () => {
   useEffect(() => {
     editorRef.current = new Editor({
       el: editorContainerRef.current,
-      height: "500px",
+      height: "95vh",
       initialEditType: "markdown",
       previewStyle: "vertical",
+      theme: "dark",
     });
 
     return () => {

@@ -15,7 +15,7 @@ import EditBox from "./components/EditBox";
 const Container = styled.div`
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100%;
 `;
 
 const Main = styled.div`
@@ -32,14 +32,14 @@ function App() {
         <Header />
         <Main>
           {/* 아래는 테스트 */}
-          {/* <ProfilePage /> */}
-          <EditBox />
-          {/* {showModal && <Modal onClose={() => setShowModal(false)} />}
+          <EditBox style={{ backgroundColor: "#ffffff" }} />
+          {showModal && <Modal onClose={() => setShowModal(false)} />}
           <Routes>
             <Route path="/signup" element={<Signup />} />
             <Route path="/about" element={<About />} />
             <Route path="/" element={<Login />} />
-          </Routes> */}
+          </Routes>
+          <ProfilePage />
         </Main>
         <Footer />
       </Container>

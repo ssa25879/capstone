@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import Profile_s from "../styles/Profile_s.css";
 
 const Profile = ({ user }) => {
   const { profileImage, name, username, bio, followers, following } = user;
