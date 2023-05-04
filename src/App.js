@@ -32,7 +32,6 @@ function App() {
         <Header />
         <Main>
           {/* 아래는 테스트 */}
-          <EditBox style={{ backgroundColor: "#ffffff" }} />
           {showModal && <Modal onClose={() => setShowModal(false)} />}
           <Routes>
             <Route path="/signup" element={<Signup />} />
@@ -40,6 +39,9 @@ function App() {
             <Route path="/" element={<Login />} />
           </Routes>
           <ProfilePage />
+          <div style={{ marginTop: "7px", paddingBottom: "10px" }}>
+            <EditBox />
+          </div>
         </Main>
         <Footer />
       </Container>

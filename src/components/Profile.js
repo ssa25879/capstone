@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import Profile_s from "../styles/Profile_s.css";
+import "../styles/Profile_s.css";
 
 const Profile = ({ user }) => {
   const { profileImage, name, username, bio, followers, following } = user;
@@ -13,7 +13,7 @@ const Profile = ({ user }) => {
   };
 
   return (
-    <div>
+    <div className="div-top">
       <img src={profileImage} alt="프로필 이미지" width="100" height="100" />
       <h1>{name}</h1>
       <h2>@{username}</h2>
