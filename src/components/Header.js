@@ -25,7 +25,7 @@ const HeaderTitle = styled.h1`
 function Header() {
   return (
     <HeaderContainer>
-      <HeaderTitle>SNS 사이트 로그인화면</HeaderTitle>
+      <HeaderTitle>SNS 사이트</HeaderTitle>
     </HeaderContainer>
   );
 }

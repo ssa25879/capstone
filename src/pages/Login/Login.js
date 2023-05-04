@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import styled from "styled-components";
-import Modal from "../components/Modal";
+import Modal from "../../components/Modal";
 
 const LoginContainer = styled.div`
   display: flex;
