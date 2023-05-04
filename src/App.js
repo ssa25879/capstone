@@ -33,19 +33,44 @@ function App() {
         <Header />
         <Main>
           <Routes>
-            <Route path="/pages/Signup" element={<Signup />} />
-            {/* 아래는 테스트
-          {showModal && <Modal onClose={() => setShowModal(false)} />}
-          <Routes>
-            <Route path="/signup" element={<Signup />} />
-            <Route path="/about" element={<About />} />
-            <Route path="/" element={<Login />} />
+            <Route
+              path="/"
+              element={
+                <center>
+                  <h2>Home</h2>
+                </center>
+              }
+            />
+            <Route path="/Signup" element={<Signup />} />
+            <Route path="/About" element={<About />} />
+            <Route path="/Login" element={<Login />} />
+
+            {/* 아래는 테스트 */}
+            {/* {showModal && <Modal onClose={() => setShowModal(false)} />}
+            <Routes>
+              <Route path="/signup" element={<Signup />} />
+              <Route path="/about" element={<About />} />
+              <Route path="/" element={<Login />} />
+            </Routes>
+            <ProfilePage />
+            <div style={{ marginTop: "7px", paddingBottom: "10px" }}>
+              <EditBox />
+            </div> */}
           </Routes>
-          <ProfilePage />
-          <div style={{ marginTop: "7px", paddingBottom: "10px" }}>
-            <EditBox />
-          </div> */}
-          </Routes>
+          <center>
+            <Link to="/">홈</Link>
+            <br />
+            <hr />
+            <Link to="/Signup">회원가입</Link>
+            <br />
+            <hr />
+            <Link to="/About">소개</Link>
+            <br />
+            <hr />
+            <Link to="/Login">로그인</Link>
+            <hr />
+            <br />
+          </center>
         </Main>
         <Footer />
       </Container>
