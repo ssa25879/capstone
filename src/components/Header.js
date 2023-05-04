@@ -2,12 +2,12 @@ import React from "react";
 import styled from "styled-components";
 
 const HeaderContainer = styled.div`
-  position: fixed;
   top: 0;
   left: 0;
   width: 100%;
   height: 60px;
   background-color: black;
+  weight: 100%;
 `;
 
 const HeaderTitle = styled.h1`
@@ -25,7 +25,7 @@ const HeaderTitle = styled.h1`
 function Header() {
   return (
     <HeaderContainer>
-      <HeaderTitle>SNS 사이트 로그인화면</HeaderTitle>
+      <HeaderTitle>SNS 사이트</HeaderTitle>
     </HeaderContainer>
   );
 }
