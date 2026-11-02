@@ -60,6 +60,7 @@ const io = new Server(server);
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.set('view engine', 'ejs');
+app.set('views', path.join(__dirname, 'views')); // 실행 위치와 관계없이 템플릿을 찾도록
 
 // 로그인한 사용자가 해당 대화방("아이디1@아이디2")의 참여자인지 확인
 function isRoomMember(socket, room) {

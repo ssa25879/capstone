@@ -14,6 +14,7 @@ let server;
 before(async () => {
     server = spawn(process.execPath, [path.join(__dirname, "..", "server.js")], {
         env: { ...process.env, PORT, DB_PATH: path.join(tmpDir, "test.db") },
+        cwd: tmpDir, // 업로드 파일(uploads/)도 임시 폴더에 저장
         stdio: "pipe",
     });
     await new Promise((resolve, reject) => {
@@ -37,8 +38,9 @@ function client() {
         const res = await fetch(BASE + url, {
             method,
             redirect: "manual",
-            headers: { "Content-Type": "application/json", Cookie: cookie },
-            body: body && JSON.stringify(body),
+            // FormData는 fetch가 multipart 헤더를 직접 설정한다
+            headers: body instanceof FormData ? { Cookie: cookie } : { "Content-Type": "application/json", Cookie: cookie },
+            body: body instanceof FormData ? body : body && JSON.stringify(body),
         });
         const setCookie = res.headers.get("set-cookie");
         if (setCookie) cookie = setCookie.split(";")[0];
@@ -126,4 +128,29 @@ test("잘못된 입력은 400/404로 거부", async () => {
     assert.strictEqual((await carol("/comment", { method: "POST", body: { postId: 1, content: "x".repeat(301) } })).status, 400);
     assert.strictEqual((await carol("/register", { method: "POST", body: {} })).status, 400);
     assert.strictEqual((await carol("/dm/a'b")).status, 404);
+});
+
+test("이미지 업로드: 큰 이미지는 축소, 이미지가 아닌 파일은 거부", async () => {
+    const sharp = require("sharp");
+    const dave = client();
+    await signup(dave, "dave");
+    await dave("/login", { method: "POST", body: { userid: "dave", password: "test1234" } });
+
+    const big = await sharp({ create: { width: 3000, height: 1000, channels: 3, background: "#9ce159" } }).png().toBuffer();
+    let form = new FormData();
+    form.append("image", new Blob([big], { type: "image/png" }), "big.png");
+    let res = await dave("/upload", { method: "POST", body: form });
+    assert.strictEqual(res.status, 200);
+    const { imageName } = await res.json();
+    assert.match(imageName, /-dave\.png-compressed\.jpg$/);
+    const meta = await sharp(path.join(tmpDir, "uploads", imageName)).metadata();
+    assert.strictEqual(meta.width, 2048);
+
+    // 이미지 MIME으로 위장한 텍스트 파일은 저장되지 않는다
+    form = new FormData();
+    form.append("image", new Blob(["<script>alert(1)</script>"], { type: "image/png" }), "x.png");
+    res = await dave("/upload", { method: "POST", body: form });
+    assert.strictEqual(res.status, 500);
+    const left = fs.readdirSync(path.join(tmpDir, "uploads"));
+    assert.deepStrictEqual(left, [imageName]);
 });
