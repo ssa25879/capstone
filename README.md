@@ -88,9 +88,11 @@ images/           저장소에 포함된 이미지 자료
 
 ## 프로젝트 화면
 
-기존 README에 포함된 축제 전시용 SNS 화면입니다.
+저장소에 포함된 피드와 실시간 DM 화면입니다.
 
-<img width="1840" alt="Frending SNS 프로젝트 화면" src="https://github.com/kdo9921/GTEC-SNS-frending/assets/21959564/ed1d606e-6a14-43a6-87f8-f6b79dfb5365">
+![Frending 게시글 피드](images/01_home_light.png)
+
+![Frending 실시간 DM](images/04_dm_chat_light.png)
 
 ## 확인 범위
 
