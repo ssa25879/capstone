@@ -148,3 +148,6 @@ dist
 /uploads/*
 .prettierrc
 .DS_Store
+
+# SQLite 데이터 파일
+/data/

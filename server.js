@@ -4,7 +4,7 @@ const { Server } = require('socket.io');
 
 const bodyParser = require("body-parser");
 const session = require("express-session");
-const sql = require("mssql");
+const db = require("./db");
 const multer = require("multer");
 const sanitizeHtml = require("sanitize-html");
 const sharp = require('sharp');
@@ -50,63 +50,36 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-app.use(express.static(path.join(__dirname, 'public'))); 
+app.use(express.static(path.join(__dirname, 'public')));
 app.set('view engine', 'ejs');
 
 // 클라이언트로부터의 연결을 기다립니다.
 io.on('connection', (socket) => {
     // 방 접속 이벤트 대기, 클라이언트에서 방번호와 이벤트 발송되면 해당 방번호로 연결
     socket.on('joinRoom', (room) => {
-        
+
         socket.join(room);
     });
 
     // 클라이언트에서 메시지 전송시 해당 방으로 메시지 전송
-    socket.on('chatMessage', async ({ room, message, nickname }) => {
-        
+    socket.on('chatMessage', ({ room, message, nickname }) => {
+
         io.to(room).emit('chatMessage', { message, nickname });
 
         // 데이터베이스에 메시지 저장
         try {
-            console.log(`roomid : ${room}\nnickname : ${nickname}\nmessage : ${message}\n`)
-
-            // 데이터베이스 연결
-            await sql.connect(config);
-
-            // 프로시저 호출
-            const request = new sql.Request();
-            
-            request.input('room_id', sql.VarChar(100), room)
-            request.input('user_id', sql.VarChar(50), nickname) // 실제 사용자 ID로 변경해야 함
-            request.input('message_content', sql.NVarChar(300), message)
-
-            await request.execute("InsertChatMessage");
-            
+            db.InsertChatMessage(room, nickname, message); // 실제 사용자 ID로 변경해야 함
         } catch (err) {
             console.error(err);
-        } finally {
-            // 연결 종료 (필요한 경우)
-            await sql.close();
         }
     });
 
-    socket.on('loadMessages', async (room) => {
+    socket.on('loadMessages', (room) => {
         try {
-            console.log(room)
-            // 데이터베이스 연결 및 메시지 로드
-            await sql.connect(config);
-            const request = new sql.Request();
-
-            request.input('room_id', sql.VarChar(100), room)
-            const result = await request.execute('GetChatMessages'); 
-            
-            console.log(result)
             // 클라이언트에게 메시지 전송
-            socket.emit('loadedMessages', result.recordset);
+            socket.emit('loadedMessages', db.GetChatMessages(room));
         } catch (err) {
             console.error(err);
-        } finally {
-            await sql.close(); // 연결을 닫거나 풀에 반환
         }
     });
 });
@@ -132,21 +105,6 @@ app.use(
     })
 );
 
-// DB 연결 정보 파일을 가져옴
-const config = require("./config");
-/*
-const config = {
-  user: 'your_id',
-  password: 'your_password',
-  server: 'your_server',
-  database: 'your_database',
-  port: 'your_port',
-  options: {
-    encrypt: true // 암호화 옵션 (SSL 사용 시)
-  }
-};
-*/
-
 // 메인 페이지 렌더링
 app.get("/", (req, res) => {
     res.sendFile(__dirname + "/index.html");
@@ -164,7 +122,7 @@ app.get("/register", (req, res) => {
 });
 
 // 게시글 작성
-app.post("/create-post", async (req, res) => {
+app.post("/create-post", (req, res) => {
     const { content } = req.body;
 
     // 입력된 HTML을 필터링하여 특정 태그만 허용
@@ -179,45 +137,20 @@ app.post("/create-post", async (req, res) => {
     }
 
     try {
-        // DB 연결
-        await sql.connect(config);
-
-        // 프로시저 호출
-        const request = new sql.Request();
-        request.input("p_user_id", sql.VarChar(50), req.session.user.user_id);
-        request.input("p_content", sql.NVarChar(4000), filteredHtml);
-        request.output("p_message", sql.VarChar(100));
-
-        const result = await request.execute("CreatePost");
-
-        // 결과 반환
-        const message = result.output.p_message;
+        const message = db.CreatePost(req.session.user.user_id, filteredHtml);
         res.status(200).json({ message });
     } catch (error) {
         console.error("게시글 작성 실패:", error);
         res.status(500).json({ message: "게시글 작성에 실패하였습니다." });
-    } finally {
-    // DB 연결 종료
-        sql.close();
     }
 });
 
 // 로그인 요청 처리
-app.post("/login", async (req, res) => {
+app.post("/login", (req, res) => {
     const { userid, password } = req.body;
 
     try {
-        // DB 연결
-        await sql.connect(config);
-
-        // 로그인 프로시저 호출
-        const request = new sql.Request();
-        request.input("userid", sql.VarChar(50), userid);
-        request.input("password", sql.VarChar(128), password);
-
-        const result = await request.execute("LoginUser");
-
-        const userData = result.recordset[0];
+        const userData = db.LoginUser(userid, password);
 
         if (userData) {
             // 로그인 성공 시 세션에 사용자 정보 저장
@@ -235,9 +168,6 @@ app.post("/login", async (req, res) => {
     } catch (error) {
         console.error(error);
         res.status(500).send("서버 오류가 발생했습니다.");
-    } finally {
-        // DB 연결 종료
-        await sql.close();
     }
 });
 
@@ -256,28 +186,21 @@ app.get("/user/:userId", (req, res) => {
 });
 
 // 채팅방 페이지 렌더링
-app.get('/dm/:room', async (req, res) => {
-    if (req.session.isLoggedIn) { 
+app.get('/dm/:room', (req, res) => {
+    if (req.session.isLoggedIn) {
         const userList = [req.params.room, req.session.user.user_id];
         userList.sort();
 
         const roomId = userList[0] + '@' + userList[1];
 
         try {
-            await sql.connect(config);
-            const request = new sql.Request();
-            request.input("user_id", sql.VarChar(50), req.session.user.user_id);
-            const result = await request.execute("GetChatList");
-            
-            res.render('chat', { room: roomId, nickname: req.session.user.user_id , chatList : result.recordset});
+            const chatList = db.GetChatList(req.session.user.user_id);
+            res.render('chat', { room: roomId, nickname: req.session.user.user_id , chatList : chatList});
         } catch (error) {
             console.error(error);
             res.status(500).send("서버 오류가 발생했습니다.");
-        } finally {
-            // DB 연결 종료
-            await sql.close();
         }
-    } 
+    }
     else {
         // 비로그인 상태일 경우 로그인 페이지로 리다이렉트
         res.redirect("/login");
@@ -285,23 +208,16 @@ app.get('/dm/:room', async (req, res) => {
 });
 
 // 채팅방 페이지 렌더링
-app.get('/dm', async (req, res) => {
-    if (req.session.isLoggedIn) { 
+app.get('/dm', (req, res) => {
+    if (req.session.isLoggedIn) {
         try {
-            await sql.connect(config);
-            const request = new sql.Request();
-            request.input("user_id", sql.VarChar(50), req.session.user.user_id);
-            const result = await request.execute("GetChatList");
-            
-            res.render('chat', { room : false, nickname: req.session.user.user_id , chatList : result.recordset});
+            const chatList = db.GetChatList(req.session.user.user_id);
+            res.render('chat', { room : false, nickname: req.session.user.user_id , chatList : chatList});
         } catch (error) {
             console.error(error);
             res.status(500).send("서버 오류가 발생했습니다.");
-        } finally {
-            // DB 연결 종료
-            await sql.close();
         }
-    } 
+    }
     else {
         // 비로그인 상태일 경우 로그인 페이지로 리다이렉트
         res.redirect("/login");
@@ -309,19 +225,10 @@ app.get('/dm', async (req, res) => {
 });
 
 // 유저 정보 api
-app.get('/api/user/:userId', async (req, res) => {
+app.get('/api/user/:userId', (req, res) => {
     try {
         const userId = req.params.userId;
-    
-        await sql.connect(config);
-    
-        // 프로시저 호출
-        const request = new sql.Request();
-        request.input("userid", sql.VarChar(50), userId);
-    
-        const result = await request.execute("GetUserInfo");
-    
-        const userData = result.recordset[0];
+        const userData = db.GetUserInfo(userId);
         res.json(userData);
     } catch (error) {
         console.error(error);
@@ -330,27 +237,16 @@ app.get('/api/user/:userId', async (req, res) => {
 });
 
 // 신고 요청 처리
-app.post("/report", async (req, res) => {
+app.post("/report", (req, res) => {
     const { postId } = req.body;
 
     try {
-        // DB 연결
-        await sql.connect(config);
-
-        // 신고 프로시저 호출
-        const request = new sql.Request();
-        request.input("p_user_id", sql.VarChar(50), req.session.user.user_id);
-        request.input("p_post_id", sql.Int, postId);
-
-        await request.execute("Report");
+        db.Report(req.session.user.user_id, postId);
 
         res.status(200).send("신고 접수");
     } catch (error) {
         console.error(error);
         res.status(500).send("서버 오류가 발생했습니다.");
-    } finally {
-        // DB 연결 종료
-        await sql.close();
     }
 });
 
@@ -393,117 +289,69 @@ app.get("/logout", (req, res) => {
 });
 
 // 포스트 가져오기
-app.get("/posts", async (req, res) => {
+app.get("/posts", (req, res) => {
     // 최근 n개의 게시글을 요청 파라미터에서 가져오기 (기본값은 10)
     const count = req.query.count || "10";
     const follow = req.query.follow;
 
     try {
-        // DB 연결
-        await sql.connect(config);
-        const request = new sql.Request();
+        const posts = db.GetPost({
+            count: parseInt(count, 10) || 10,
+            follow: follow && req.session.user,
+            userId: req.session.user ? req.session.user.user_id : null,
+        });
 
-        request.input("p_cnt", sql.Int, count);
-
-        if (follow && req.session.user) {
-            request.input("p_follow", sql.VarChar(1), "Y");
-        }
-
-        if (req.session.user) {
-            request.input("p_userId", sql.VarChar(50), req.session.user.user_id);
-        }
-
-        const result = await request.execute("GetPost");
-
-        res.json(result.recordset);
+        res.json(posts);
     } catch (error) {
         console.error(error);
         res.status(500).send("서버 오류가 발생했습니다.");
-    } finally {
-        // DB 연결 종료
-        await sql.close();
     }
 });
 
 
 // 댓글 가져오기
-app.get("/comment", async (req, res) => {
+app.get("/comment", (req, res) => {
     // 최근 n개의 게시글을 요청 파라미터에서 가져오기 (기본값은 10)
     const postId = req.query.post;
 
     try {
-        // DB 연결
-        await sql.connect(config);
-        const request = new sql.Request();
-
-        request.input("p_post_id", sql.Int, postId);
-
-        const result = await request.execute("GetComment");
-
-        res.json(result.recordset);
+        res.json(db.GetComment(postId));
     } catch (error) {
         console.error(error);
         res.status(500).send("서버 오류가 발생했습니다.");
-    } finally {
-        // DB 연결 종료
-        await sql.close();
     }
 });
 
 // 댓글 작성
-app.post("/comment", async (req, res) => {
+app.post("/comment", (req, res) => {
     const { postId, content } = req.body;
 
     try {
-        // DB 연결
-        await sql.connect(config);
-
-        // 신고 프로시저 호출
-        const request = new sql.Request();
-        request.input("p_post_id", sql.Int, postId);
-        request.input("p_user_id", sql.VarChar(50), req.session.user.user_id);
-        request.input("p_content", sql.NVarChar(300), content);
-        request.output("p_message", sql.VarChar(100));
-
-        await request.execute("CreateComment");
+        db.CreateComment(postId, req.session.user.user_id, content);
 
         res.status(200).send("댓글 작성");
     } catch (error) {
         console.error(error);
         res.status(500).send("서버 오류가 발생했습니다.");
-    } finally {
-        // DB 연결 종료
-        await sql.close();
     }
 });
 
 // 팔로우 요청 처리
-app.post("/follow", async (req, res) => {
+app.post("/follow", (req, res) => {
     const { userId} = req.body;
 
     try {
-        // DB 연결
-        await sql.connect(config);
-
-        // 로그인 프로시저 호출
-        const request = new sql.Request();
-        request.input("follower_id", sql.VarChar(50), req.session.user.user_id);
-        request.input("following_id", sql.VarChar(50), userId);
-
-        await request.execute("FollowUser");
+        db.FollowUser(req.session.user.user_id, userId);
 
         res.status(200).send("Done");
     } catch (error) {
         console.error(error);
         res.status(500).send("서버 오류가 발생했습니다.");
-    } finally {
-        // DB 연결 종료
-        await sql.close();
     }
 });
 
 // 회원가입 요청 처리
-app.post("/register", async (req, res) => {
+app.post("/register", (req, res) => {
     const { userid, password, user_name, bio, student_id } = req.body;
 
     if (userid.length < 4) {
@@ -532,29 +380,14 @@ app.post("/register", async (req, res) => {
     }
 
     // IP 주소 가져오기
-    const ipAddress = requestIp.getClientIp(req);; 
+    const ipAddress = requestIp.getClientIp(req);;
     // 브라우저 정보 가져오기
     const browser = req.headers['user-agent'];
 
     try {
-        // DB 연결
-        await sql.connect(config);
-
-        // 회원가입 프로시저 호출
-        const request = new sql.Request();
-        request.input("userid", sql.VarChar(50), userid);
-        request.input("password", sql.VarChar(128), password);
-        request.input("user_name", sql.NVarChar(50), user_name);
-        request.input("bio", sql.NVarChar(1000), bio);
-        request.input("student_id", sql.VarChar(50), student_id);
-        request.input("IP_Address", sql.VarChar(255), ipAddress);
-        request.input("Browser_Info", sql.VarChar(255), browser);
-        request.output("registerSuccess", sql.Bit);
-        request.output("errorMessage", sql.NVarChar(200));
-
-        const result = await request.execute("RegisterUser");
-
-        const { registerSuccess, errorMessage } = result.output;
+        const { registerSuccess, errorMessage } = db.RegisterUser({
+            userid, password, user_name, bio, student_id, ipAddress, browser,
+        });
 
         // 회원가입 결과 처리
 
@@ -568,9 +401,6 @@ app.post("/register", async (req, res) => {
     } catch (error) {
         console.error(error);
         res.status(500).send("서버 오류가 발생했습니다.");
-    } finally {
-        // DB 연결 종료
-        await sql.close();
     }
 });
 
@@ -587,7 +417,7 @@ app.post("/upload", upload.single("image"), (req, res) => {
         .metadata()
         .then(metadata => {
             const { width, height } = metadata;
-            
+
             // 가로 또는 세로 중 하나라도 2048 이상인 경우에만 비율에 맞춰 이미지 조절
             if (width >= 2048 || height >= 2048) {
                 const scaleFactor = Math.min(2048 / width, 2048 / height);
@@ -639,14 +469,20 @@ function generateRandomString(length) {
 
 
 // 서버를 시작합니다.
-const PORT = 3000; // 포트 번호는 환경에 맞게 변경할 수 있습니다.
+const PORT = process.env.PORT || 3000; // 포트 번호는 환경 변수로 변경할 수 있습니다.
 server.listen(PORT, () => {
-    console.log(`서버가 http://localhost:${PORT} 에서 실행 중입니다.`);
+    console.log(`서버가 http://localhost:${PORT} 에서 실행 중입니다. (종료: Ctrl+C)`);
 });
 
-
-sql.connect(config, err => {
-    if(err) {
-      console.log("Error while connecting to database:", err);
-    }
-  });
+// 종료 신호를 받으면 연결을 정리하고 DB를 닫은 뒤 종료합니다.
+function shutdown() {
+    console.log("서버를 종료합니다.");
+    // io.close()는 HTTP 서버도 함께 닫는다
+    io.close(() => {
+        db.db.close();
+        process.exit(0);
+    });
+    setTimeout(() => process.exit(0), 3000).unref();
+}
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
