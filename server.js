@@ -21,11 +21,14 @@ const imageExtensions = {
     "image/webp": "webp",
 };
 
+// 업로드 이미지 저장 폴더
+const uploadDir = process.env.UPLOAD_DIR || path.join(__dirname, "uploads");
+
 // 아이디 형식 (회원가입 규칙과 동일)
 const userIdPattern = /^[a-zA-Z0-9_]+$/;
 
 const storage = multer.diskStorage({
-    destination: "uploads", // 저장할 폴더 경로
+    destination: uploadDir, // 저장할 폴더 경로
     filename: (req, file, cb) => {
         // 파일 이름 설정 로직
         const userId = req.session.user.user_id;
@@ -59,6 +62,8 @@ const server = http.createServer(app);
 const io = new Server(server);
 
 app.use(express.static(path.join(__dirname, 'public')));
+// 업로드한 이미지 제공 (에디터가 /uploads/파일명 으로 삽입함)
+app.use('/uploads', express.static(uploadDir, { dotfiles: 'deny', index: false }));
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views')); // 실행 위치와 관계없이 템플릿을 찾도록
 
@@ -169,7 +174,7 @@ app.post("/create-post", requireLogin, (req, res) => {
     });
 
     if (filteredHtml.length == 0) {
-        return;
+        return res.status(400).json({ message: "내용을 입력해주세요." });
     }
 
     try {
@@ -433,8 +438,9 @@ app.post("/register", (req, res) => {
         return
     }
 
-    if (userid.length < 4) {
-        res.status(400).send("사용자 이름이 너무 짧습니다 (최소 4자 이상)");
+    // 기존 코드는 아이디 길이를 다시 검사하고 있었음. 한글 이름을 고려해 최소 2자로 검사
+    if (user_name.length < 2) {
+        res.status(400).send("사용자 이름이 너무 짧습니다 (최소 2자 이상)");
         return
     } else if (!/^[\wㄱ-힣]+$/.test(user_name)) {
         res.status(400).send(
@@ -471,6 +477,9 @@ app.post("/register", (req, res) => {
 app.post("/upload", requireLogin, upload.single("image"), (req, res) => {
     // 업로드된 이미지 처리
     const file = req.file;
+    if (!file) {
+        return res.status(400).send("업로드할 이미지가 없습니다.");
+    }
     // 이미지 파일의 이름을 반환
     const imageName = file.filename;
     // 업로드된 이미지 경로
@@ -490,7 +499,7 @@ app.post("/upload", requireLogin, upload.single("image"), (req, res) => {
                 sharp(imagePath)
                     .resize(Math.round(width * scaleFactor), Math.round(height * scaleFactor))
                     .jpeg({ quality: 80 })
-                    .toFile(`uploads/${req.file.filename}-compressed.jpg`, (err, info) => {
+                    .toFile(path.join(uploadDir, `${req.file.filename}-compressed.jpg`), (err, info) => {
                         if (err) {
                             console.error(err);
                             // 에러 처리 로직
@@ -520,6 +529,15 @@ app.post("/upload", requireLogin, upload.single("image"), (req, res) => {
         });
 });
 
+
+// 업로드 오류(용량 초과, 허용하지 않는 형식)는 400으로 응답 (기본 오류 페이지의 스택 노출 방지)
+app.use((err, req, res, next) => {
+    if (err instanceof multer.MulterError || err.message === "이미지 파일만 허용됩니다.") {
+        return res.status(400).send(err.code === "LIMIT_FILE_SIZE" ? "파일 사이즈는 20MB 이하만 허용됩니다." : err.message);
+    }
+    console.error(err);
+    res.status(500).send("서버 오류가 발생했습니다.");
+});
 
 // 서버를 시작합니다.
 const PORT = process.env.PORT || 3000; // 포트 번호는 환경 변수로 변경할 수 있습니다.

@@ -13,8 +13,7 @@ let server;
 
 before(async () => {
     server = spawn(process.execPath, [path.join(__dirname, "..", "server.js")], {
-        env: { ...process.env, PORT, DB_PATH: path.join(tmpDir, "test.db") },
-        cwd: tmpDir, // 업로드 파일(uploads/)도 임시 폴더에 저장
+        env: { ...process.env, PORT, DB_PATH: path.join(tmpDir, "test.db"), UPLOAD_DIR: path.join(tmpDir, "uploads") },
         stdio: "pipe",
     });
     await new Promise((resolve, reject) => {
@@ -153,4 +152,37 @@ test("이미지 업로드: 큰 이미지는 축소, 이미지가 아닌 파일�
     assert.strictEqual(res.status, 500);
     const left = fs.readdirSync(path.join(tmpDir, "uploads"));
     assert.deepStrictEqual(left, [imageName]);
+});
+
+test("버그 수정 확인: 업로드 이미지 제공, 빈 글·짧은 이름·파일 없음 처리", async () => {
+    const sharp = require("sharp");
+    const erin = client();
+    await signup(erin, "erin");
+    await erin("/login", { method: "POST", body: { userid: "erin", password: "test1234" } });
+
+    // 업로드한 이미지를 /uploads 경로로 볼 수 있다
+    const small = await sharp({ create: { width: 10, height: 10, channels: 3, background: "#000" } }).png().toBuffer();
+    const form = new FormData();
+    form.append("image", new Blob([small], { type: "image/png" }), "s.png");
+    const { imageName } = await (await erin("/upload", { method: "POST", body: form })).json();
+    const img = await erin(`/uploads/${imageName}`);
+    assert.strictEqual(img.status, 200);
+    assert.strictEqual(img.headers.get("content-type"), "image/png");
+
+    // 파일 없이 업로드하면 400 (기존: 서버 예외)
+    assert.strictEqual((await erin("/upload", { method: "POST", body: new FormData() })).status, 400);
+
+    // 허용하지 않는 형식은 400
+    const svg = new FormData();
+    svg.append("image", new Blob(["<svg/>"], { type: "image/svg+xml" }), "a.svg");
+    assert.strictEqual((await erin("/upload", { method: "POST", body: svg })).status, 400);
+
+    // 빈 게시글은 400 (기존: 응답 없이 요청이 멈춤)
+    assert.strictEqual((await erin("/create-post", { method: "POST", body: { content: "<script></script>" } })).status, 400);
+
+    // 사용자 이름 길이 검사 (기존: 아이디 길이를 잘못 검사)
+    const short = await erin("/register", { method: "POST", body: { userid: "frank", password: "test1234", user_name: "a" } });
+    assert.strictEqual(short.status, 400);
+    const korean = await erin("/register", { method: "POST", body: { userid: "gildong", password: "test1234", user_name: "홍길동" } });
+    assert.strictEqual(korean.status, 200);
 });

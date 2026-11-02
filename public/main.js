@@ -149,7 +149,9 @@ function btn_PostClick() {
         .then((response) => response.json())
         .then((data) => {
             console.log("Post creation result:", data.message);
-            // 원하는 동작 수행 (예: 메시지 출력, 페이지 리로드 등)
+            // 작성이 끝난 뒤에 목록을 다시 불러온다 (작성 전에 불러오면 새 글이 빠짐)
+            canLoadPosts = true;
+            getPosts(postCount);
         })
         .catch((error) => {
             console.error("Error creating post:", error);
@@ -157,8 +159,6 @@ function btn_PostClick() {
         });
 
     editor.setMarkdown("");
-    canLoadPosts = true;
-    getPosts(postCount);
 }
 
 // 포스트 리스트를 채우는 함수
@@ -220,8 +220,8 @@ async function getPosts(count) {
         }
         const posts = await response.json();
 
-        if (posts.length == count);
-        {
+        // 요청한 개수만큼 왔을 때만 다음 요청 개수를 늘린다 (기존: if 뒤 세미콜론으로 항상 실행)
+        if (posts.length == count) {
             postCount += 5;
         }
 
@@ -342,7 +342,7 @@ async function getComment(postId, autoHide = true) {
             commentHTML += `
                 <div class="mb-3">
                     <label for="new_comment_${postId}" class="form-label">댓글 작성</label>
-                    <input type="email" class="form-control" id="new_comment_${postId}" placeholder="댓글 게시하기">
+                    <input type="text" maxlength="300" class="form-control" id="new_comment_${postId}" placeholder="댓글 게시하기">
                     <div class="text-end mt-2">
                         <button class="btn btn-primary" onclick="postComment(${postId})">
                             작성
@@ -383,15 +383,17 @@ function postComment(postId) {
         if (!response.ok) {
             throw new Error('Network response was not ok');
         }
-        return response.json(); 
+        // 서버는 텍스트로 응답하므로 JSON으로 파싱하지 않는다
+        return response.text();
+    })
+    .then(function() {
+        // 작성이 끝난 뒤에 댓글을 다시 불러온다
+        getComment(postId, false);
     })
     .catch(function(error) {
         console.error('There was a problem with the fetch operation:', error);
     });
 
-    setTimeout(function() {
-        getComment(postId, false);
-    }, 100); // 100 밀리초 (0.1초) 후에 실행
     commentElement.value = "";
 }
 
