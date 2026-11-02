@@ -11,6 +11,19 @@ const sharp = require('sharp');
 const requestIp = require('request-ip');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+
+// 허용하는 이미지 형식과 저장 확장자 (클라이언트가 보낸 파일명 확장자는 사용하지 않음)
+const imageExtensions = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/gif": "gif",
+    "image/webp": "webp",
+};
+
+// 아이디 형식 (회원가입 규칙과 동일)
+const userIdPattern = /^[a-zA-Z0-9_]+$/;
+
 const storage = multer.diskStorage({
     destination: "uploads", // 저장할 폴더 경로
     filename: (req, file, cb) => {
@@ -18,7 +31,7 @@ const storage = multer.diskStorage({
         const userId = req.session.user.user_id;
         const date = new Date(Date.now() + (9 * 60 * 60 * 1000)).toISOString();
         const formattedDate = date.replace(/[.:]/g, '');
-        const fileExtension = file.originalname.split(".").pop(); // 파일 확장자
+        const fileExtension = imageExtensions[file.mimetype]; // 파일 확장자
 
         const fileName = `${formattedDate}-${userId}.${fileExtension}`;
 
@@ -27,14 +40,8 @@ const storage = multer.diskStorage({
 });
 
 const fileFilter = (req, file, cb) => {
-    // 파일 사이즈 제한 (20MB 이하)
-    const maxSize = 20 * 1024 * 1024; // 20MB
-    if (file.size > maxSize) {
-        return cb(new Error("파일 사이즈는 20MB 이하만 허용됩니다."));
-    }
-
-    // 파일 유형 제한 (이미지 파일만 허용)
-    if (!file.mimetype.startsWith("image/")) {
+    // 파일 유형 제한 (jpg, png, gif, webp만 허용)
+    if (!imageExtensions[file.mimetype]) {
         return cb(new Error("이미지 파일만 허용됩니다."));
     }
 
@@ -42,7 +49,8 @@ const fileFilter = (req, file, cb) => {
     cb(null, true);
 };
 
-const upload = multer({ storage: storage, fileFilter: fileFilter });
+// 파일 사이즈 제한 (20MB 이하) - fileFilter 단계에서는 file.size를 알 수 없어 limits로 제한
+const upload = multer({ storage: storage, fileFilter: fileFilter, limits: { fileSize: 20 * 1024 * 1024 } });
 
 
 
@@ -53,28 +61,39 @@ const io = new Server(server);
 app.use(express.static(path.join(__dirname, 'public')));
 app.set('view engine', 'ejs');
 
+// 로그인한 사용자가 해당 대화방("아이디1@아이디2")의 참여자인지 확인
+function isRoomMember(socket, room) {
+    const user = socket.request.session && socket.request.session.user;
+    return Boolean(user) && typeof room === "string" && room.split("@").includes(user.user_id);
+}
+
 // 클라이언트로부터의 연결을 기다립니다.
 io.on('connection', (socket) => {
     // 방 접속 이벤트 대기, 클라이언트에서 방번호와 이벤트 발송되면 해당 방번호로 연결
     socket.on('joinRoom', (room) => {
-
+        if (!isRoomMember(socket, room)) return;
         socket.join(room);
     });
 
     // 클라이언트에서 메시지 전송시 해당 방으로 메시지 전송
-    socket.on('chatMessage', ({ room, message, nickname }) => {
+    // 발신자는 클라이언트가 보낸 nickname이 아니라 세션의 사용자 ID를 사용한다
+    socket.on('chatMessage', ({ room, message } = {}) => {
+        if (!isRoomMember(socket, room)) return;
+        if (typeof message !== "string" || !message.trim() || message.length > 300) return;
 
+        const nickname = socket.request.session.user.user_id;
         io.to(room).emit('chatMessage', { message, nickname });
 
         // 데이터베이스에 메시지 저장
         try {
-            db.InsertChatMessage(room, nickname, message); // 실제 사용자 ID로 변경해야 함
+            db.InsertChatMessage(room, nickname, message);
         } catch (err) {
             console.error(err);
         }
     });
 
     socket.on('loadMessages', (room) => {
+        if (!isRoomMember(socket, room)) return;
         try {
             // 클라이언트에게 메시지 전송
             socket.emit('loadedMessages', db.GetChatMessages(room));
@@ -85,8 +104,8 @@ io.on('connection', (socket) => {
 });
 
 
-// 세션 암호화를 위한 비밀키
-const secretKey = generateRandomString(32);
+// 세션 암호화를 위한 비밀키 (지정하지 않으면 실행할 때마다 새로 생성)
+const secretKey = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 
 
 // Body-parser 미들웨어 설정
@@ -94,16 +113,28 @@ app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
 
 // 세션 설정
-app.use(
-    session({
-        secret: secretKey,
-        resave: false,
-        saveUninitialized: false,
-        cookie: {
-            maxAge: 10800000, // 세션 유효 기간 (3시간)
-        },
-    })
-);
+const sessionMiddleware = session({
+    secret: secretKey,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+        maxAge: 10800000, // 세션 유효 기간 (3시간)
+        httpOnly: true,
+        sameSite: "lax",
+    },
+});
+app.use(sessionMiddleware);
+// Socket.IO에서도 같은 세션으로 사용자를 확인한다
+io.engine.use(sessionMiddleware);
+
+// 로그인이 필요한 API (비로그인 시 401)
+const requireLogin = (req, res, next) => {
+    if (req.session.isLoggedIn) {
+        next();
+    } else {
+        res.status(401).json({ message: "로그인 후 이용해주세요." });
+    }
+};
 
 // 메인 페이지 렌더링
 app.get("/", (req, res) => {
@@ -122,8 +153,12 @@ app.get("/register", (req, res) => {
 });
 
 // 게시글 작성
-app.post("/create-post", (req, res) => {
+app.post("/create-post", requireLogin, (req, res) => {
     const { content } = req.body;
+
+    if (typeof content !== "string" || content.length > 20000) {
+        return res.status(400).json({ message: "게시글 내용이 올바르지 않습니다." });
+    }
 
     // 입력된 HTML을 필터링하여 특정 태그만 허용
     const filteredHtml = sanitizeHtml(content, {
@@ -149,18 +184,29 @@ app.post("/create-post", (req, res) => {
 app.post("/login", (req, res) => {
     const { userid, password } = req.body;
 
+    if (typeof userid !== "string" || typeof password !== "string") {
+        return res.status(400).send("아이디와 비밀번호를 입력해주세요.");
+    }
+
     try {
         const userData = db.LoginUser(userid, password);
 
         if (userData) {
-            // 로그인 성공 시 세션에 사용자 정보 저장
-            req.session.user = {
-                user_id: userData.user_id,
-                name: userData.user_name,
-                bio: userData.bio,
-            };
-            req.session.isLoggedIn = true;
-            res.status(200).send("로그인 성공");
+            // 세션 고정 공격 방지를 위해 로그인 시 세션 ID를 새로 발급
+            req.session.regenerate((err) => {
+                if (err) {
+                    console.error(err);
+                    return res.status(500).send("서버 오류가 발생했습니다.");
+                }
+                // 로그인 성공 시 세션에 사용자 정보 저장
+                req.session.user = {
+                    user_id: userData.user_id,
+                    name: userData.user_name,
+                    bio: userData.bio,
+                };
+                req.session.isLoggedIn = true;
+                res.status(200).send("로그인 성공");
+            });
         } else {
             // 로그인 실패
             res.status(401).send("아이디 또는 비밀번호가 잘못되었습니다.");
@@ -188,6 +234,10 @@ app.get("/user/:userId", (req, res) => {
 // 채팅방 페이지 렌더링
 app.get('/dm/:room', (req, res) => {
     if (req.session.isLoggedIn) {
+        // 상대 아이디 형식이 아니면 거부 (템플릿의 스크립트에 그대로 들어가므로)
+        if (!userIdPattern.test(req.params.room)) {
+            return res.status(404).send("사용자를 찾을 수 없습니다.");
+        }
         const userList = [req.params.room, req.session.user.user_id];
         userList.sort();
 
@@ -237,7 +287,7 @@ app.get('/api/user/:userId', (req, res) => {
 });
 
 // 신고 요청 처리
-app.post("/report", (req, res) => {
+app.post("/report", requireLogin, (req, res) => {
     const { postId } = req.body;
 
     try {
@@ -296,7 +346,7 @@ app.get("/posts", (req, res) => {
 
     try {
         const posts = db.GetPost({
-            count: parseInt(count, 10) || 10,
+            count: Math.min(parseInt(count, 10) || 10, 100), // 한 번에 최대 100개
             follow: follow && req.session.user,
             userId: req.session.user ? req.session.user.user_id : null,
         });
@@ -323,8 +373,12 @@ app.get("/comment", (req, res) => {
 });
 
 // 댓글 작성
-app.post("/comment", (req, res) => {
+app.post("/comment", requireLogin, (req, res) => {
     const { postId, content } = req.body;
+
+    if (typeof content !== "string" || !content.trim() || content.length > 300) {
+        return res.status(400).send("댓글은 1~300자로 입력해주세요.");
+    }
 
     try {
         db.CreateComment(postId, req.session.user.user_id, content);
@@ -337,7 +391,7 @@ app.post("/comment", (req, res) => {
 });
 
 // 팔로우 요청 처리
-app.post("/follow", (req, res) => {
+app.post("/follow", requireLogin, (req, res) => {
     const { userId} = req.body;
 
     try {
@@ -353,6 +407,15 @@ app.post("/follow", (req, res) => {
 // 회원가입 요청 처리
 app.post("/register", (req, res) => {
     const { userid, password, user_name, bio, student_id } = req.body;
+
+    // 형식·길이 검증 (기존 DB 컬럼 길이 기준)
+    if (typeof userid !== "string" || typeof password !== "string" || typeof user_name !== "string") {
+        return res.status(400).send("필수 항목을 입력해주세요.");
+    }
+    if (userid.length > 50 || password.length > 128 || user_name.length > 50
+        || String(bio || "").length > 1000 || String(student_id || "").length > 50) {
+        return res.status(400).send("입력값이 너무 깁니다.");
+    }
 
     if (userid.length < 4) {
         res.status(400).send("아이디가 너무 짧습니다 (최소 4자 이상)");
@@ -404,7 +467,7 @@ app.post("/register", (req, res) => {
     }
 });
 
-app.post("/upload", upload.single("image"), (req, res) => {
+app.post("/upload", requireLogin, upload.single("image"), (req, res) => {
     // 업로드된 이미지 처리
     const file = req.file;
     // 이미지 파일의 이름을 반환
@@ -450,22 +513,11 @@ app.post("/upload", upload.single("image"), (req, res) => {
         })
         .catch(err => {
             console.error(err);
-            // 에러 처리 로직
+            // 이미지로 읽을 수 없는 파일은 저장하지 않는다
+            fs.unlink(imagePath, () => {});
             res.status(500).send("이미지 처리 중 오류가 발생했습니다.");
         });
 });
-
-
-function generateRandomString(length) {
-    const characters =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    let randomString = "";
-    for (let i = 0; i < length; i++) {
-        const randomIndex = Math.floor(Math.random() * characters.length);
-        randomString += characters.charAt(randomIndex);
-    }
-    return randomString;
-}
 
 
 // 서버를 시작합니다.

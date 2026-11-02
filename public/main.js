@@ -329,8 +329,8 @@ async function getComment(postId, autoHide = true) {
         // 새로운 포스트 리스트 채우기
         comments.forEach((comment) => {
             commentHTML += `
-                <h3>${comment.USER_ID}</h3>
-                <p>${comment.CONTENT}</p>
+                <h3>${escapeHtml(comment.USER_ID)}</h3>
+                <p>${escapeHtml(comment.CONTENT)}</p>
                 <hr>
                 `;
         });
@@ -436,6 +436,16 @@ function reportPost(postId) {
             console.log("Error reporting post:", error);
             // 에러 처리
         });
+}
+
+// 사용자 입력을 HTML에 넣기 전에 특수문자를 이스케이프
+function escapeHtml(value) {
+    return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
 }
 
 // 쿠키 설정

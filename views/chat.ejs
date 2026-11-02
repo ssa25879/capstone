@@ -285,7 +285,7 @@ href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.0/dist/css/bootstrap.min.css"
         socket.emit('loadMessages', '<%= room %>');
         
         const pathname = window.location.pathname;
-        document.getElementById("chat_user").innerHTML = pathname.replace("/dm/","");
+        document.getElementById("chat_user").textContent = pathname.replace("/dm/","");
     });
 
     // 서버로부터 이전 메시지를 받음

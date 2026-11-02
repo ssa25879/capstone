@@ -108,3 +108,22 @@ test("비로그인 상태의 DM 접근은 로그인으로 리다이렉트", asyn
     assert.strictEqual(res.status, 302);
     assert.strictEqual(res.headers.get("location"), "/login");
 });
+
+test("비로그인 상태의 쓰기 API는 401", async () => {
+    const guest = client();
+    for (const url of ["/create-post", "/comment", "/follow", "/report", "/upload"]) {
+        const res = await guest(url, { method: "POST", body: {} });
+        assert.strictEqual(res.status, 401, url);
+    }
+});
+
+test("잘못된 입력은 400/404로 거부", async () => {
+    const carol = client();
+    await signup(carol, "carol");
+    await carol("/login", { method: "POST", body: { userid: "carol", password: "test1234" } });
+
+    assert.strictEqual((await carol("/comment", { method: "POST", body: { postId: 1, content: "" } })).status, 400);
+    assert.strictEqual((await carol("/comment", { method: "POST", body: { postId: 1, content: "x".repeat(301) } })).status, 400);
+    assert.strictEqual((await carol("/register", { method: "POST", body: {} })).status, 400);
+    assert.strictEqual((await carol("/dm/a'b")).status, 404);
+});
