@@ -177,7 +177,7 @@
 							// 회원가입 성공 시
 							const message = await response.text();
 							alert(message); // 성공 메시지를 팝업으로 표시하거나 다른 처리를 수행할 수 있습니다.
-							window.location.href = "/login.html"; // 로그인 후 이동할 페이지
+							window.location.href = "/login"; // 회원가입 후 로그인 페이지로 이동 (서버는 /login 경로로 제공)
 						} else {
 							// 회원가입 실패 시
 							const error = await response.text();
