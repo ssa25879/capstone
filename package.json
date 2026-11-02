@@ -5,8 +5,8 @@
   "main": "server.js",
   "scripts": {
     "test": "node --test",
-    "start": "node server.js",
-    "seed": "node scripts/seed.js"
+    "start": "node --env-file-if-exists=.env server.js",
+    "seed": "node --env-file-if-exists=.env scripts/seed.js"
   },
   "repository": {
     "type": "git",
@@ -24,6 +24,7 @@
     "express": "^4.22.3",
     "express-session": "^1.19.0",
     "multer": "^2.5.0",
+    "pg": "^8.23.1",
     "request-ip": "^3.3.0",
     "sanitize-html": "^2.18.1",
     "sharp": "^0.35.5",
@@ -31,5 +32,9 @@
   },
   "engines": {
     "node": ">=22.13"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.14",
+    "@electric-sql/pglite-socket": "^0.2.17"
   }
 }

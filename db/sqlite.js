@@ -1,11 +1,11 @@
 // SQLite 데이터베이스 모듈
 // 기존 MSSQL 저장 프로시저를 같은 이름의 함수로 대체한다.
 const { DatabaseSync } = require("node:sqlite");
-const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const { hashPassword, verifyPassword } = require("./password");
 
-const dbPath = process.env.DB_PATH || path.join(__dirname, "data", "frending.db");
+const dbPath = process.env.DB_PATH || path.join(__dirname, "..", "data", "frending.db");
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
 const db = new DatabaseSync(dbPath);
@@ -64,19 +64,6 @@ db.exec(`
 
 // 화면 표시용 시간 (한국 시간, 분 단위)
 const KST = (col) => `strftime('%Y-%m-%d %H:%M', ${col}, '+9 hours')`;
-
-// 비밀번호 해시 (scrypt, salt 포함)
-function hashPassword(password) {
-    const salt = crypto.randomBytes(16).toString("hex");
-    const hash = crypto.scryptSync(password, salt, 64).toString("hex");
-    return `${salt}:${hash}`;
-}
-
-function verifyPassword(password, stored) {
-    const [salt, hash] = stored.split(":");
-    const candidate = crypto.scryptSync(password, salt, 64);
-    return crypto.timingSafeEqual(candidate, Buffer.from(hash, "hex"));
-}
 
 function RegisterUser({ userid, password, user_name, bio, student_id, ipAddress, browser }) {
     const exists = db.prepare("SELECT 1 FROM users WHERE user_id = ?").get(userid);
@@ -179,7 +166,10 @@ function GetChatList(userId) {
 }
 
 module.exports = {
-    db,
+    // 스키마는 모듈을 불러올 때 이미 만들어진다 (Postgres 모듈과 인터페이스를 맞추기 위한 함수)
+    init: async () => {},
+    close: async () => db.close(),
+    CountUsers: () => db.prepare("SELECT COUNT(*) AS n FROM users").get().n,
     RegisterUser,
     LoginUser,
     GetUserInfo,

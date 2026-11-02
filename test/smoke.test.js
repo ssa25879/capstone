@@ -6,19 +6,74 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const PORT = 3999;
+const http = require("node:http");
+
+// 기본은 SQLite + 로컬 업로드.
+// supabase.test.js에서 "supabase"로 지정하면 PGlite(Postgres)와 모의 Supabase Storage로 같은 테스트를 실행한다.
+const SUPABASE = process.env.FRENDING_TEST_BACKEND === "supabase";
+const PORT = SUPABASE ? 3998 : 3999;
 const BASE = `http://127.0.0.1:${PORT}`;
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "frending-test-"));
+const SERVICE_KEY = "test-service-key";
 let server;
+let pg;
+let storageServer;
+const storedObjects = new Map(); // 모의 Storage에 저장된 파일
+
+// Supabase Storage REST API 중 서버가 사용하는 부분만 흉내 낸다
+function startMockStorage(port) {
+    storageServer = http.createServer((req, res) => {
+        const chunks = [];
+        req.on("data", (c) => chunks.push(c));
+        req.on("end", () => {
+            const publicMatch = req.url.match(/^\/storage\/v1\/object\/public\/uploads\/(.+)$/);
+            if (req.method === "GET" && publicMatch) {
+                const obj = storedObjects.get(decodeURIComponent(publicMatch[1]));
+                if (!obj) return res.writeHead(404).end();
+                return res.writeHead(200, { "Content-Type": obj.type }).end(obj.body);
+            }
+            // 쓰기 요청은 service_role 키가 있어야 한다
+            if (req.headers.authorization !== `Bearer ${SERVICE_KEY}` || req.headers.apikey !== SERVICE_KEY) {
+                return res.writeHead(401).end("unauthorized");
+            }
+            if (req.method === "POST" && req.url === "/storage/v1/bucket") {
+                return res.writeHead(200).end("{}");
+            }
+            const uploadMatch = req.url.match(/^\/storage\/v1\/object\/uploads\/(.+)$/);
+            if (req.method === "POST" && uploadMatch) {
+                storedObjects.set(decodeURIComponent(uploadMatch[1]), { type: req.headers["content-type"], body: Buffer.concat(chunks) });
+                return res.writeHead(200).end("{}");
+            }
+            res.writeHead(404).end();
+        });
+    });
+    return new Promise((resolve) => storageServer.listen(port, "127.0.0.1", resolve));
+}
 
 before(async () => {
-    server = spawn(process.execPath, [path.join(__dirname, "..", "server.js")], {
-        env: { ...process.env, PORT, DB_PATH: path.join(tmpDir, "test.db"), UPLOAD_DIR: path.join(tmpDir, "uploads") },
-        stdio: "pipe",
-    });
+    const env = { ...process.env, PORT, DB_PATH: path.join(tmpDir, "test.db"), UPLOAD_DIR: path.join(tmpDir, "uploads") };
+    if (SUPABASE) {
+        // PGlite: 설치 없이 쓰는 내장형 Postgres. 소켓 서버로 띄워 pg 클라이언트가 접속한다
+        const { PGlite } = await import("@electric-sql/pglite");
+        const { PGLiteSocketServer } = await import("@electric-sql/pglite-socket");
+        const pgDb = await PGlite.create();
+        pg = { db: pgDb, server: new PGLiteSocketServer({ db: pgDb, port: 5498, host: "127.0.0.1" }) };
+        await pg.server.start();
+        await startMockStorage(5497);
+        Object.assign(env, {
+            DATABASE_URL: "postgres://postgres:postgres@127.0.0.1:5498/postgres",
+            DATABASE_SSL: "disable",
+            PG_POOL_MAX: "1", // PGlite는 연결 하나만 처리한다
+            SUPABASE_URL: "http://127.0.0.1:5497",
+            SUPABASE_SERVICE_ROLE_KEY: SERVICE_KEY,
+        });
+    }
+    server = spawn(process.execPath, [path.join(__dirname, "..", "server.js")], { env, stdio: "pipe" });
+    let log = "";
     await new Promise((resolve, reject) => {
         server.stdout.on("data", (d) => d.toString().includes("실행 중") && resolve());
-        server.on("exit", (code) => reject(new Error(`server exited ${code}`)));
+        server.stderr.on("data", (d) => { log += d; });
+        server.on("exit", (code) => reject(new Error(`server exited ${code}: ${log}`)));
     });
 });
 
@@ -27,8 +82,21 @@ after(async () => {
     const exited = new Promise((resolve) => server.once("exit", resolve));
     server.kill();
     await exited;
+    if (SUPABASE) {
+        await pg.server.stop();
+        await pg.db.close();
+        storageServer.close();
+    }
     fs.rmSync(tmpDir, { recursive: true, force: true });
 });
+
+// 업로드된 이미지 내용과 목록 (로컬 폴더 또는 모의 Storage)
+function readUploaded(name) {
+    return SUPABASE ? storedObjects.get(name).body : fs.readFileSync(path.join(tmpDir, "uploads", name));
+}
+function listUploaded() {
+    return SUPABASE ? [...storedObjects.keys()] : fs.readdirSync(path.join(tmpDir, "uploads"));
+}
 
 // 쿠키를 유지하는 간단한 클라이언트
 function client() {
@@ -142,7 +210,7 @@ test("이미지 업로드: 큰 이미지는 축소, 이미지가 아닌 파일�
     assert.strictEqual(res.status, 200);
     const { imageName } = await res.json();
     assert.match(imageName, /-dave\.png-compressed\.jpg$/);
-    const meta = await sharp(path.join(tmpDir, "uploads", imageName)).metadata();
+    const meta = await sharp(readUploaded(imageName)).metadata();
     assert.strictEqual(meta.width, 2048);
 
     // 이미지 MIME으로 위장한 텍스트 파일은 저장되지 않는다
@@ -150,7 +218,7 @@ test("이미지 업로드: 큰 이미지는 축소, 이미지가 아닌 파일�
     form.append("image", new Blob(["<script>alert(1)</script>"], { type: "image/png" }), "x.png");
     res = await dave("/upload", { method: "POST", body: form });
     assert.strictEqual(res.status, 500);
-    const left = fs.readdirSync(path.join(tmpDir, "uploads"));
+    const left = listUploaded();
     assert.deepStrictEqual(left, [imageName]);
 });
 
@@ -165,7 +233,12 @@ test("버그 수정 확인: 업로드 이미지 제공, 빈 글·짧은 이름·
     const form = new FormData();
     form.append("image", new Blob([small], { type: "image/png" }), "s.png");
     const { imageName } = await (await erin("/upload", { method: "POST", body: form })).json();
-    const img = await erin(`/uploads/${imageName}`);
+    let img = await erin(`/uploads/${imageName}`);
+    if (SUPABASE) {
+        // Supabase Storage 공개 URL로 리다이렉트된다
+        assert.strictEqual(img.status, 302);
+        img = await fetch(img.headers.get("location"));
+    }
     assert.strictEqual(img.status, 200);
     assert.strictEqual(img.headers.get("content-type"), "image/png");
 

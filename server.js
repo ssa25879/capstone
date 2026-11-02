@@ -5,6 +5,7 @@ const { Server } = require('socket.io');
 const bodyParser = require("body-parser");
 const session = require("express-session");
 const db = require("./db");
+const imageStore = require("./storage");
 const multer = require("multer");
 const sanitizeHtml = require("sanitize-html");
 const sharp = require('sharp');
@@ -58,12 +59,26 @@ const upload = multer({ storage: storage, fileFilter: fileFilter, limits: { file
 
 
 const app = express();
+// 배포 환경(Render 등)은 HTTPS 프록시 뒤에서 동작하므로 프록시 헤더를 신뢰해야 secure 쿠키와 클라이언트 IP가 올바르게 처리된다
+if (process.env.NODE_ENV === "production") {
+    app.set('trust proxy', 1);
+}
 const server = http.createServer(app);
 const io = new Server(server);
 
 app.use(express.static(path.join(__dirname, 'public')));
 // 업로드한 이미지 제공 (에디터가 /uploads/파일명 으로 삽입함)
-app.use('/uploads', express.static(uploadDir, { dotfiles: 'deny', index: false }));
+if (imageStore.enabled) {
+    // Supabase Storage 공개 URL로 이동 (게시글에 저장된 /uploads 경로를 그대로 사용)
+    app.get('/uploads/:name', (req, res) => {
+        if (!/^[\w.-]+$/.test(req.params.name)) {
+            return res.status(404).end();
+        }
+        res.redirect(302, imageStore.publicUrl(req.params.name));
+    });
+} else {
+    app.use('/uploads', express.static(uploadDir, { dotfiles: 'deny', index: false }));
+}
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views')); // 실행 위치와 관계없이 템플릿을 찾도록
 
@@ -83,7 +98,7 @@ io.on('connection', (socket) => {
 
     // 클라이언트에서 메시지 전송시 해당 방으로 메시지 전송
     // 발신자는 클라이언트가 보낸 nickname이 아니라 세션의 사용자 ID를 사용한다
-    socket.on('chatMessage', ({ room, message } = {}) => {
+    socket.on('chatMessage', async ({ room, message } = {}) => {
         if (!isRoomMember(socket, room)) return;
         if (typeof message !== "string" || !message.trim() || message.length > 300) return;
 
@@ -92,17 +107,17 @@ io.on('connection', (socket) => {
 
         // 데이터베이스에 메시지 저장
         try {
-            db.InsertChatMessage(room, nickname, message);
+            await db.InsertChatMessage(room, nickname, message);
         } catch (err) {
             console.error(err);
         }
     });
 
-    socket.on('loadMessages', (room) => {
+    socket.on('loadMessages', async (room) => {
         if (!isRoomMember(socket, room)) return;
         try {
             // 클라이언트에게 메시지 전송
-            socket.emit('loadedMessages', db.GetChatMessages(room));
+            socket.emit('loadedMessages', await db.GetChatMessages(room));
         } catch (err) {
             console.error(err);
         }
@@ -125,6 +140,7 @@ const sessionMiddleware = session({
     saveUninitialized: false,
     cookie: {
         maxAge: 10800000, // 세션 유효 기간 (3시간)
+        secure: process.env.NODE_ENV === "production", // 배포(HTTPS) 환경에서는 HTTPS로만 쿠키 전송
         httpOnly: true,
         sameSite: "lax",
     },
@@ -159,7 +175,7 @@ app.get("/register", (req, res) => {
 });
 
 // 게시글 작성
-app.post("/create-post", requireLogin, (req, res) => {
+app.post("/create-post", requireLogin, async (req, res) => {
     const { content } = req.body;
 
     if (typeof content !== "string" || content.length > 20000) {
@@ -178,7 +194,7 @@ app.post("/create-post", requireLogin, (req, res) => {
     }
 
     try {
-        const message = db.CreatePost(req.session.user.user_id, filteredHtml);
+        const message = await db.CreatePost(req.session.user.user_id, filteredHtml);
         res.status(200).json({ message });
     } catch (error) {
         console.error("게시글 작성 실패:", error);
@@ -187,7 +203,7 @@ app.post("/create-post", requireLogin, (req, res) => {
 });
 
 // 로그인 요청 처리
-app.post("/login", (req, res) => {
+app.post("/login", async (req, res) => {
     const { userid, password } = req.body;
 
     if (typeof userid !== "string" || typeof password !== "string") {
@@ -195,7 +211,7 @@ app.post("/login", (req, res) => {
     }
 
     try {
-        const userData = db.LoginUser(userid, password);
+        const userData = await db.LoginUser(userid, password);
 
         if (userData) {
             // 세션 고정 공격 방지를 위해 로그인 시 세션 ID를 새로 발급
@@ -238,7 +254,7 @@ app.get("/user/:userId", (req, res) => {
 });
 
 // 채팅방 페이지 렌더링
-app.get('/dm/:room', (req, res) => {
+app.get('/dm/:room', async (req, res) => {
     if (req.session.isLoggedIn) {
         // 상대 아이디 형식이 아니면 거부 (템플릿의 스크립트에 그대로 들어가므로)
         if (!userIdPattern.test(req.params.room)) {
@@ -250,7 +266,7 @@ app.get('/dm/:room', (req, res) => {
         const roomId = userList[0] + '@' + userList[1];
 
         try {
-            const chatList = db.GetChatList(req.session.user.user_id);
+            const chatList = await db.GetChatList(req.session.user.user_id);
             res.render('chat', { room: roomId, nickname: req.session.user.user_id , chatList : chatList});
         } catch (error) {
             console.error(error);
@@ -264,10 +280,10 @@ app.get('/dm/:room', (req, res) => {
 });
 
 // 채팅방 페이지 렌더링
-app.get('/dm', (req, res) => {
+app.get('/dm', async (req, res) => {
     if (req.session.isLoggedIn) {
         try {
-            const chatList = db.GetChatList(req.session.user.user_id);
+            const chatList = await db.GetChatList(req.session.user.user_id);
             res.render('chat', { room : false, nickname: req.session.user.user_id , chatList : chatList});
         } catch (error) {
             console.error(error);
@@ -281,10 +297,10 @@ app.get('/dm', (req, res) => {
 });
 
 // 유저 정보 api
-app.get('/api/user/:userId', (req, res) => {
+app.get('/api/user/:userId', async (req, res) => {
     try {
         const userId = req.params.userId;
-        const userData = db.GetUserInfo(userId);
+        const userData = await db.GetUserInfo(userId);
         res.json(userData);
     } catch (error) {
         console.error(error);
@@ -293,11 +309,11 @@ app.get('/api/user/:userId', (req, res) => {
 });
 
 // 신고 요청 처리
-app.post("/report", requireLogin, (req, res) => {
+app.post("/report", requireLogin, async (req, res) => {
     const { postId } = req.body;
 
     try {
-        db.Report(req.session.user.user_id, postId);
+        await db.Report(req.session.user.user_id, postId);
 
         res.status(200).send("신고 접수");
     } catch (error) {
@@ -345,13 +361,13 @@ app.get("/logout", (req, res) => {
 });
 
 // 포스트 가져오기
-app.get("/posts", (req, res) => {
+app.get("/posts", async (req, res) => {
     // 최근 n개의 게시글을 요청 파라미터에서 가져오기 (기본값은 10)
     const count = req.query.count || "10";
     const follow = req.query.follow;
 
     try {
-        const posts = db.GetPost({
+        const posts = await db.GetPost({
             count: Math.min(parseInt(count, 10) || 10, 100), // 한 번에 최대 100개
             follow: follow && req.session.user,
             userId: req.session.user ? req.session.user.user_id : null,
@@ -366,12 +382,12 @@ app.get("/posts", (req, res) => {
 
 
 // 댓글 가져오기
-app.get("/comment", (req, res) => {
+app.get("/comment", async (req, res) => {
     // 최근 n개의 게시글을 요청 파라미터에서 가져오기 (기본값은 10)
     const postId = req.query.post;
 
     try {
-        res.json(db.GetComment(postId));
+        res.json(await db.GetComment(postId));
     } catch (error) {
         console.error(error);
         res.status(500).send("서버 오류가 발생했습니다.");
@@ -379,7 +395,7 @@ app.get("/comment", (req, res) => {
 });
 
 // 댓글 작성
-app.post("/comment", requireLogin, (req, res) => {
+app.post("/comment", requireLogin, async (req, res) => {
     const { postId, content } = req.body;
 
     if (typeof content !== "string" || !content.trim() || content.length > 300) {
@@ -387,7 +403,7 @@ app.post("/comment", requireLogin, (req, res) => {
     }
 
     try {
-        db.CreateComment(postId, req.session.user.user_id, content);
+        await db.CreateComment(postId, req.session.user.user_id, content);
 
         res.status(200).send("댓글 작성");
     } catch (error) {
@@ -397,11 +413,11 @@ app.post("/comment", requireLogin, (req, res) => {
 });
 
 // 팔로우 요청 처리
-app.post("/follow", requireLogin, (req, res) => {
+app.post("/follow", requireLogin, async (req, res) => {
     const { userId} = req.body;
 
     try {
-        db.FollowUser(req.session.user.user_id, userId);
+        await db.FollowUser(req.session.user.user_id, userId);
 
         res.status(200).send("Done");
     } catch (error) {
@@ -411,7 +427,7 @@ app.post("/follow", requireLogin, (req, res) => {
 });
 
 // 회원가입 요청 처리
-app.post("/register", (req, res) => {
+app.post("/register", async (req, res) => {
     const { userid, password, user_name, bio, student_id } = req.body;
 
     // 형식·길이 검증 (기존 DB 컬럼 길이 기준)
@@ -455,7 +471,7 @@ app.post("/register", (req, res) => {
     const browser = req.headers['user-agent'];
 
     try {
-        const { registerSuccess, errorMessage } = db.RegisterUser({
+        const { registerSuccess, errorMessage } = await db.RegisterUser({
             userid, password, user_name, bio, student_id, ipAddress, browser,
         });
 
@@ -474,59 +490,51 @@ app.post("/register", (req, res) => {
     }
 });
 
-app.post("/upload", requireLogin, upload.single("image"), (req, res) => {
+app.post("/upload", requireLogin, upload.single("image"), async (req, res) => {
     // 업로드된 이미지 처리
     const file = req.file;
     if (!file) {
         return res.status(400).send("업로드할 이미지가 없습니다.");
     }
     // 이미지 파일의 이름을 반환
-    const imageName = file.filename;
+    let imageName = file.filename;
     // 업로드된 이미지 경로
-    const imagePath = req.file.path;
+    let imagePath = req.file.path;
 
-    // 이미지 정보 가져오기
-    sharp(imagePath)
-        .metadata()
-        .then(metadata => {
-            const { width, height } = metadata;
+    try {
+        // 이미지 정보 가져오기
+        const { width, height } = await sharp(imagePath).metadata();
 
-            // 가로 또는 세로 중 하나라도 2048 이상인 경우에만 비율에 맞춰 이미지 조절
-            if (width >= 2048 || height >= 2048) {
-                const scaleFactor = Math.min(2048 / width, 2048 / height);
+        // 가로 또는 세로 중 하나라도 2048 이상인 경우에만 비율에 맞춰 이미지 조절
+        if (width >= 2048 || height >= 2048) {
+            const scaleFactor = Math.min(2048 / width, 2048 / height);
+            const compressedName = `${req.file.filename}-compressed.jpg`;
+            const compressedPath = path.join(uploadDir, compressedName);
 
-                // 이미지 조절 및 압축
-                sharp(imagePath)
-                    .resize(Math.round(width * scaleFactor), Math.round(height * scaleFactor))
-                    .jpeg({ quality: 80 })
-                    .toFile(path.join(uploadDir, `${req.file.filename}-compressed.jpg`), (err, info) => {
-                        if (err) {
-                            console.error(err);
-                            // 에러 처리 로직
-                            return res.status(500).send("이미지 처리 중 오류가 발생했습니다.");
-                        }
+            // 이미지 조절 및 압축
+            await sharp(imagePath)
+                .resize(Math.round(width * scaleFactor), Math.round(height * scaleFactor))
+                .jpeg({ quality: 80 })
+                .toFile(compressedPath);
 
-                        // 기존 파일 삭제
-                        fs.unlink(imagePath, err => {
-                            if (err) {
-                                console.log(err);
-                                // 에러 처리 로직
-                            }
-                        })
+            // 기존 파일 삭제
+            await fs.promises.unlink(imagePath);
+            imageName = compressedName;
+            imagePath = compressedPath;
+        }
 
-                        res.json({ imageName: `${req.file.filename}-compressed.jpg` });
-                    });
-            } else {
-                // 2048 이하인 경우에는 그대로 저장
-                res.json({ imageName: imageName });
-            }
-        })
-        .catch(err => {
-            console.error(err);
-            // 이미지로 읽을 수 없는 파일은 저장하지 않는다
-            fs.unlink(imagePath, () => {});
-            res.status(500).send("이미지 처리 중 오류가 발생했습니다.");
-        });
+        // Supabase Storage를 쓰는 경우 버킷에 올리고 로컬 파일은 삭제
+        if (imageStore.enabled) {
+            await imageStore.save(imagePath, imageName);
+        }
+
+        res.json({ imageName: imageName });
+    } catch (err) {
+        console.error(err);
+        // 이미지로 읽을 수 없거나 처리에 실패한 파일은 저장하지 않는다
+        fs.unlink(imagePath, () => {});
+        res.status(500).send("이미지 처리 중 오류가 발생했습니다.");
+    }
 });
 
 
@@ -539,18 +547,28 @@ app.use((err, req, res, next) => {
     res.status(500).send("서버 오류가 발생했습니다.");
 });
 
-// 서버를 시작합니다.
+// DB 테이블과 저장소 버킷을 준비한 뒤 서버를 시작합니다.
 const PORT = process.env.PORT || 3000; // 포트 번호는 환경 변수로 변경할 수 있습니다.
-server.listen(PORT, () => {
-    console.log(`서버가 http://localhost:${PORT} 에서 실행 중입니다. (종료: Ctrl+C)`);
+(async () => {
+    await db.init();
+    if (imageStore.enabled) {
+        await imageStore.ensureBucket();
+    }
+    server.listen(PORT, () => {
+        console.log(`서버가 http://localhost:${PORT} 에서 실행 중입니다. (종료: Ctrl+C)`);
+        console.log(`DB: ${process.env.DATABASE_URL ? "Postgres" : "SQLite"}, 이미지 저장소: ${imageStore.enabled ? "Supabase Storage" : "로컬"}`);
+    });
+})().catch((err) => {
+    console.error("서버 시작 실패:", err.message);
+    process.exit(1);
 });
 
 // 종료 신호를 받으면 연결을 정리하고 DB를 닫은 뒤 종료합니다.
 function shutdown() {
     console.log("서버를 종료합니다.");
     // io.close()는 HTTP 서버도 함께 닫는다
-    io.close(() => {
-        db.db.close();
+    io.close(async () => {
+        await db.close();
         process.exit(0);
     });
     setTimeout(() => process.exit(0), 3000).unref();
